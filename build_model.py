@@ -38,4 +38,4 @@ for epoch in range(num_epochs):
         optimizer.step()
 
 # Save the fine-tuned model
-model.save_pretrained("fine_tuned_model")
+model.save_pretrained("chatgpt_model.pkl")
