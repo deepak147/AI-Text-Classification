@@ -1,29 +1,30 @@
-import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
-import seaborn as sn
+import scipy as sp
 
-from sklearn.metrics import confusion_matrix
+model.eval()
 
+valid_data['label'] = label_encoder.transform(valid_data['author_type'])
 
-def evaluate_model(model, X_val, y_val, label_encoder):
-    # Evaluate the model
-    loss, accuracy = model.evaluate(X_val, y_val)
-    print(f"Validation accuracy: {accuracy * 100:.2f}%")
-    y_val_pred = model.predict(X_val)
-    y_val_pred_labels = label_encoder.inverse_transform(np.argmax(y_val_pred, axis=1))
-    y_val_true_labels = label_encoder.inverse_transform(np.argmax(y_val, axis=1))
+# Tokenize and create DataLoader for the validation set
+valid_encodings = tokenizer(valid_data['text'].tolist(), truncation=True, padding=True, return_tensors='pt')
+valid_labels = torch.tensor(valid_data['label'].tolist())
+valid_dataset = TensorDataset(valid_encodings['input_ids'], valid_encodings['attention_mask'], valid_labels)
+valid_dataloader = DataLoader(valid_dataset, batch_size=8, shuffle=False)
 
-    # Create a confusion matrix
-    confusion_mat = confusion_matrix(y_val_true_labels, y_val_pred_labels)
+all_predictions = []
+all_true_labels = []
 
-    print("Confusion Matrix:")
-    print(confusion_mat)
+with torch.no_grad():
+    for batch in valid_dataloader:
+        input_ids, attention_mask, labels = batch
+        input_ids, attention_mask, labels = input_ids.to(device), attention_mask.to(device), labels.to(device)
 
-    df_cm = pd.DataFrame(
-        confusion_mat,
-        index=[i for i in ["AI", "AI, Owned", "AI-TextBook", "Student"]],
-        columns=[i for i in ["AI", "AI, Owned", "AI-TextBook", "Student"]],
-    )
-    plt.figure(figsize=(7, 5))
-    sn.heatmap(df_cm, annot=True, cmap="Blues")
+        outputs = model(input_ids, attention_mask=attention_mask)
+        logits = outputs.logits
+        predictions = torch.argmax(logits, dim=1).cpu().numpy()
+
+        all_predictions.extend(predictions)
+        all_true_labels.extend(labels.cpu().numpy())
+
+accuracy = (np.array(all_predictions) == np.array(all_true_labels)).mean()
+print(f"Validation Accuracy: {accuracy:.2%}")
