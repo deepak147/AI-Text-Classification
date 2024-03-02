@@ -1,66 +1,41 @@
-import pickle
-
-import numpy as np
-
-from tensorflow.keras.callbacks import EarlyStopping
-from tensorflow.keras.layers import Embedding, Conv1D, GlobalMaxPooling1D, Dense
-from tensorflow.keras.models import Sequential
+import torch
+from torch.utils.data import DataLoader, TensorDataset
+from transformers import DistilBertTokenizerFast, DistilBertForSequenceClassification, AdamW
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
 
 
-def build_model(
-    X_train, X_val, y_train, y_val, model_w2v, tokenizer, label_encoder
-):
-    
-    with open('max_len.txt', "rb") as file:
-        max_length = int(file.read())
-    # Build the deep learning model
-    embedding_matrix = np.zeros((len(tokenizer.word_index) + 1, 300))
-    for word, i in tokenizer.word_index.items():
-        if word in model_w2v:
-            embedding_matrix[i] = model_w2v[word]
+train_data, valid_data = train_test_split(df, test_size=0.1, random_state=42)
 
-    model = Sequential()
-    model.add(
-        Embedding(
-            input_dim=len(tokenizer.word_index) + 1,
-            output_dim=300,
-            weights=[embedding_matrix],
-            input_length=int(max_length),
-            trainable=False,
-        )
-    )
-    model.add(Conv1D(128, 5, activation="relu"))
-    model.add(GlobalMaxPooling1D())
-    model.add(Dense(4, activation="softmax"))
-    model.compile(
-        loss="categorical_crossentropy", optimizer="adam", metrics=["accuracy"]
-    )
+# Load DistilBERT tokenizer and model
+tokenizer = DistilBertTokenizerFast.from_pretrained("distilbert-base-uncased")
+model = DistilBertForSequenceClassification.from_pretrained("distilbert-base-uncased")
+label_encoder = LabelEncoder()
+train_data['label'] = label_encoder.fit_transform(train_data['author_type'])
 
-    # Define early stopping, hyperparameter
-    early_stopping = EarlyStopping(
-        monitor="val_loss", patience=3, restore_best_weights=True
-    )
+# Tokenize and create DataLoader for training set
+train_encodings = tokenizer(train_data['text'].tolist(), truncation=True, padding=True, return_tensors='pt')
+train_labels = torch.tensor(train_data['label'].tolist())
+train_dataset = TensorDataset(train_encodings['input_ids'], train_encodings['attention_mask'], train_labels)
+train_dataloader = DataLoader(train_dataset, batch_size=8, shuffle=True)
 
-    # Train the Model
-    model.fit(
-        X_train,
-        y_train,
-        validation_data=(X_val, y_val),
-        epochs=100,
-        batch_size=32,
-        callbacks=[early_stopping],
-    )
+# Fine-tune the model
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+model.train()
+optimizer = AdamW(model.parameters(), lr=1e-5)
 
-    model_pkl_file = "chatgpt_model.pkl"
-    with open(model_pkl_file, "wb") as file:
-        pickle.dump(model, file)
+num_epochs = 3  # Adjust as needed
+for epoch in range(num_epochs):
+    for batch in train_dataloader:
+        input_ids, attention_mask, labels = batch
+        input_ids, attention_mask, labels = input_ids.to(device), attention_mask.to(device), labels.to(device)
 
-    tokenizer_file = "tokenizer.pkl"
-    with open(tokenizer_file, "wb") as file:
-        pickle.dump(tokenizer, file)
+        optimizer.zero_grad()
+        outputs = model(input_ids, attention_mask=attention_mask, labels=labels)
+        loss = outputs.loss
+        loss.backward()
+        optimizer.step()
 
-    label_encoder_file = "label_encoder.pkl"
-    with open(label_encoder_file, "wb") as file:
-        pickle.dump(label_encoder, file)
-
-    return model
+# Save the fine-tuned model
+model.save_pretrained("fine_tuned_model")
